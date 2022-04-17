@@ -1,7 +1,7 @@
-1) use weighted updation of buy_trigger and sale trigger
-2) in debug mode print loss and gain
-3) Improve debug mode by reading the quote file only once
-4) In sell decision, if sell quatatity is ther in portfolio or not
+1) use weighted updation of buy_trigger and sale trigger [Done]
+2) in debug mode print loss and gain [Done]
+3) Improve debug mode by reading the quote file only once [Done]
+4) In sell decision, if sell quatatity is there in portfolio or not
 5) Use the buy and sell quatatity information from quote
 6) Make hostogram of theta and ration of buy/sell quantatity and take decision
 7) Make some early trigger, no need to wait for time slot

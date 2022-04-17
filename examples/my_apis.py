@@ -5,7 +5,7 @@ import json
 import datetime
 import numpy as np
 
-def my_init(debug_time,data_path='E:\\kite\\pykiteconnect\\history\\'):
+def my_init(debug_time,data_path='E:\\kite\\pykiteconnect\\history\\',samples_per_decision=40):
 
     trading_session = False
     
@@ -14,7 +14,7 @@ def my_init(debug_time,data_path='E:\\kite\\pykiteconnect\\history\\'):
     if (system_time.tm_hour >= 7) and trading_session == False and (system_time.tm_hour <= 16):
     #if False:
         kite = kite_login()
-        offset = -1
+        offset = -samples_per_decision # load minimum number of samples from file # offset is assumed to be only negative
         debug_session = False
         holdings = kite.holdings()
     else:
@@ -38,11 +38,11 @@ def my_init(debug_time,data_path='E:\\kite\\pykiteconnect\\history\\'):
             if(((int(yr_ref) == int(yr)) and (int(mnth_ref) == int(mnth)) and (int(date_ref) == int(date))) and (int(hr) >= int(hr_ref)) and (int(min) >= int(min_ref)) and (int(sec) >= int(sec_ref))):
                 break
             
-        offset = offset - len(lines)
+        offset = offset - len(lines) # offset is assumed to be only negative
 
     watch_list = prep_watch_list('E:\\kite\\pykiteconnect\\watch_list.txt')
     watch_list.append({'tradingsymbol':'NSE:NIFTY 50','weight':1.0,'last_price':0.0})
-    for holding in holdings:
+    for holding in holdings: # IN DEBUG SESSION read txt files and determine holdings. 
         stock_name = holding['tradingsymbol']
         already_present = False
         for watch in watch_list:
@@ -110,35 +110,26 @@ def dump_last_prices(last_prices, watch_list, samples_per_decision, data_path='E
                 file.write('\n')
         file.close()
 
-def update_last_price(last_prices,kite, stock, trading_session, debug_session, offset,data_path='E:\\kite\\pykiteconnect\\history\\April-2022\\',my_logger=None):
+def update_last_price(last_prices,kite, stock, my_logger=None):
     
-    if trading_session == True:
-
-        try:
-            quote = kite.quote(stock)
-        except Exception as e:
-            got_ltp = False
-            my_logger.debug("First try of the {} quote failed \n".format(stock))
-            while got_ltp == False:
-                time.sleep(5)
-                try:
-                    quote = kite.quote(stock)
-                    got_ltp = True
-                except Exception as e2:
-                    my_logger.debug(" Not getting the {} last price \n".format(stock))
+    try:
+        quote = kite.quote(stock)
+    except Exception as e:
+        got_ltp = False
+        my_logger.debug("First try of the {} quote failed \n".format(stock))
+        while got_ltp == False:
+            time.sleep(5)
+            try:
+                quote = kite.quote(stock)
+                got_ltp = True
+            except Exception as e2:
+                my_logger.debug(" Not getting the {} last price \n".format(stock))
 
 
-        quote[stock]['timestamp'] = str(quote[stock]['timestamp'])
-        if(stock != 'NSE:NIFTY 50'):
-            quote[stock]['last_trade_time'] = str(quote[stock]['last_trade_time'])
-        last_prices[stock].append(json.dumps(quote[stock]))     # convert dictionary to string and then append       
-    elif debug_session == True:
-        with open(data_path+stock.replace(':',"_")+'_.txt', 'r') as file:
-            json_data = file.read()
-            lines = json_data.split("\n")
-            quote = lines[offset]
-        file.close()
-        last_prices[stock].append(quote)
+    quote[stock]['timestamp'] = str(quote[stock]['timestamp'])
+    if(stock != 'NSE:NIFTY 50'):
+        quote[stock]['last_trade_time'] = str(quote[stock]['last_trade_time'])
+    last_prices[stock].append(json.dumps(quote[stock]))     # convert dictionary to string and then append       
 
 
 def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
@@ -148,9 +139,14 @@ def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
     price_list =[]
     timestamp = '0-0-0 0:0:0'
     lines = last_prices
+    # offset is assumed to be only negative
+    if (samples_per_decision <= len(lines)) and (abs(offset) <= len(lines) and ((offset+samples_per_decision) <= 0)):
+        
+        if offset+samples_per_decision == 0:
+            selected_lines = lines[offset:]    
+        else:    
+            selected_lines = lines[offset:offset+samples_per_decision]
 
-    if samples_per_decision <= len(lines):
-        selected_lines = lines[-samples_per_decision:]
         is_possible = True
     else:
         is_possible = False
@@ -158,6 +154,8 @@ def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
     time_list = []
     price_list = []
 
+    buy_quantity = 1
+    sell_quantity = 1
 
     if is_possible == True:  
 
@@ -182,7 +180,6 @@ def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
         price_list.append(line['last_price'])
         time_list.append(0)
         prev_time_obj = time.strptime(timestamp.split()[-1], "%H:%M:%S")
-
         for line in selected_lines[1:]:
             if (line != '\n') and line != '':
                 json_acceptable_string = line.replace("'", "\"")
@@ -190,6 +187,17 @@ def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
 
                 timestamp = line['timestamp']
                 last_price = line['last_price']
+                
+                if 'buy_quantity' in line:
+                    buy_quantity = buy_quantity + line['buy_quantity']
+                else:
+                    buy_quantity = 1
+
+                if 'sell_quantity' in line:
+                    sell_quantity = sell_quantity + line['sell_quantity']
+                else:
+                    sell_quantity = 1
+
                 price_list.append(last_price)
                 cur_time_obj = time.strptime(timestamp.split()[-1], "%H:%M:%S")
                 if cur_time_obj > prev_time_obj:
@@ -203,34 +211,41 @@ def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
                 prev_time_obj = cur_time_obj
 
         cum_time_list = [sum(time_list[0:x:1]) for x in range(1, len(time_list)+1)]   
-    return np.array(cum_time_list), np.array(price_list), timestamp, is_possible
+    return np.array(cum_time_list), np.array(price_list), timestamp, is_possible, buy_quantity/sell_quantity
 
-def prep_last_prices(watch_list,data_path='E:\\kite\\pykiteconnect\\history\\',samples_per_decision=50,offset=-1, my_logger=None):
+def prep_last_prices(watch_list,data_path='E:\\kite\\history\\',load_num_samples=50,offset=-1, my_logger=None):
     
     last_prices = {}
     is_possible = False
 
     for stock in watch_list:
-        if samples_per_decision != 0:
-            with open(data_path+stock.replace(':',"_")+'_.txt', 'r') as file:
+        if load_num_samples != 0:
+
+            try:
+                file = open(data_path+stock.replace(':',"_")+'_.txt', 'r')
+                file_present = 1
+            except Exception as e:
+                file_present = 0
+
+            if file_present == 1:
                 json_data = file.read()
                 lines = json_data.split("\n")
-                if offset <= -1:
-                    if (samples_per_decision <=len(lines)):
-                    #if True:
-                        #selected_lines = lines[offset:offset+samples_per_decision]
-                        selected_lines = lines[-samples_per_decision:]
-                        is_possible = True
+                
+                if (load_num_samples <= len(lines)) and (abs(offset) <= len(lines) and ((offset+load_num_samples) <= 0)):
+                
+                    is_possible = True
+
+                    if (offset + load_num_samples) == 0:
+                        selected_lines = lines[offset:]
                     else:
-                        is_possible = False
+                        selected_lines = lines[offset:offset + load_num_samples]
                 else:
-                    if samples_per_decision < len(lines):
-                        selected_lines = lines[-samples_per_decision:]
-                        is_possible = True
-                    else:
-                        is_possible = False
-                        my_logger.debug('could not read last prices of stock from file \n', stock)
-            file.close()
+                    is_possible = False
+                    my_logger.debug('could not read last prices of stock from file \n', stock)
+
+                file.close()
+            else:
+                is_possible = False
 
         if is_possible == True:
             last_prices[stock] = selected_lines
@@ -241,7 +256,9 @@ def prep_last_prices(watch_list,data_path='E:\\kite\\pykiteconnect\\history\\',s
     return last_prices
 
 def take_buy_decision(kite,slot_exec_flag,slot_exec_time,trading_session,watch_list_trading_symbol,system_time,slot_buy_amount,buy_trigger,timestamp_list,my_logger):
-
+    
+    buystock = ''
+    
     for idx, (flag,tic) in enumerate(zip(slot_exec_flag, slot_exec_time)):
         tic_hr = (int)(tic.split(':')[0])
         tic_min = (int)(tic.split(':')[1])
@@ -275,17 +292,19 @@ def take_buy_decision(kite,slot_exec_flag,slot_exec_time,trading_session,watch_l
                 except Exception as e:                                        
                     my_logger.debug("Buy Order could not be placed for stock {}".format(buystock))
                     
-                buy_trigger = np.zeros(len(watch_list_trading_symbol)) #once will check this after removing
+                buy_trigger = buy_trigger*0.7 #once will check this after removing
                 
         else:
             buy_indx = np.where(buy_trigger == np.amax(buy_trigger))[0][0]
             if ((int(timestamp_list[buy_indx].split()[1].split(":")[0])) == tic_hr) and ((int(timestamp_list[buy_indx].split()[1].split(":")[1])) == tic_min) and flag == False:
                 buystock = watch_list_trading_symbol[np.where(buy_trigger == np.amax(buy_trigger))[0][0]].replace('NSE:','')
                 slot_exec_flag[idx] = True
-                buy_trigger = np.zeros(len(watch_list_trading_symbol))
+                #buy_trigger = np.zeros(len(watch_list_trading_symbol))
+                buy_trigger = buy_trigger*0.7
                 my_logger.debug("Buy stock {} at time {}".format(buystock,timestamp_list[buy_indx]))
                 print("Buy stock {} at time {}".format(buystock,timestamp_list[buy_indx]))
-    return buy_trigger
+
+    return buy_trigger,buystock
 
 
 def take_sell_decision(kite,slot_exec_flag,slot_exec_time,trading_session,watch_list_trading_symbol,system_time,slot_sell_amount,sell_trigger,timestamp_list,my_logger):
