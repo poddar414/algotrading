@@ -5,23 +5,21 @@ import json
 import datetime
 import numpy as np
 
-def my_init(debug_time,data_path='E:\\kite\\pykiteconnect\\history\\',samples_per_decision=40):
+def my_init(debug_time,data_path='E:\\kite\\pykiteconnect\\history\\',samples_per_decision=40,consider_holdings=False,debug_session=False):
 
     trading_session = False
     
     # Check if login is required or not
     system_time = time.localtime(time.time())
-    if (system_time.tm_hour >= 7) and trading_session == False and (system_time.tm_hour <= 16):
-    #if False:
+    if (system_time.tm_hour >= 7) and trading_session == False and (system_time.tm_hour <= 16) and debug_session==False:
         kite = kite_login()
         offset = -samples_per_decision # load minimum number of samples from file # offset is assumed to be only negative
         debug_session = False
         holdings = kite.holdings()
     else:
         kite = 'NULL'
-        debug_session = True
         holdings = [] 
-        with open(data_path+'NSE_NIFTY 50_.txt', 'r') as file:
+        with open(data_path+'NSE_NIFTYBEES_.txt', 'r') as file:
             json_data = file.read()
             lines = json_data.split("\n")
         file.close()
@@ -29,7 +27,7 @@ def my_init(debug_time,data_path='E:\\kite\\pykiteconnect\\history\\',samples_pe
         yr_ref,mnth_ref,date_ref = debug_time.split()[0].split('-')
         hr_ref,min_ref,sec_ref = debug_time.split()[1].split(':')
 
-        for offset, line in enumerate(lines):
+        for offset, line in enumerate(lines[0:-1]):
             json_acceptable_string = line.replace("'", "\"")
             line = json.loads(json_acceptable_string)
             timestamp = line['timestamp']
@@ -41,15 +39,17 @@ def my_init(debug_time,data_path='E:\\kite\\pykiteconnect\\history\\',samples_pe
         offset = offset - len(lines) # offset is assumed to be only negative
 
     watch_list = prep_watch_list('E:\\kite\\pykiteconnect\\watch_list.txt')
-    watch_list.append({'tradingsymbol':'NSE:NIFTY 50','weight':1.0,'last_price':0.0})
-    for holding in holdings: # IN DEBUG SESSION read txt files and determine holdings. 
-        stock_name = holding['tradingsymbol']
-        already_present = False
-        for watch in watch_list:
-            if watch['tradingsymbol'].split(':')[1] == stock_name:
-                already_present = True
-        if already_present == False:
-            watch_list.append({'tradingsymbol':'NSE:'+stock_name,'weight':1.0,'last_price':1.0})
+    watch_list.append({'tradingsymbol':'NSE:NIFTYBEES','weight':1.0,'last_price':0.0})
+    if consider_holdings == True:
+        for holding in holdings: # IN DEBUG SESSION read txt files and determine holdings. 
+            stock_name = holding['tradingsymbol']
+            stock_name = stock_name.replace("*","")
+            already_present = False
+            for watch in watch_list:
+                if watch['tradingsymbol'].split(':')[1] == stock_name:
+                    already_present = True
+            if already_present == False:
+                watch_list.append({'tradingsymbol':'NSE:'+stock_name,'weight':1.0,'last_price':1.0})
 
 
     watch_list_trading_symbol=[item['tradingsymbol'] for item in watch_list]
@@ -135,10 +135,20 @@ def update_last_price(last_prices,kite, stock, my_logger=None):
 def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
     
     is_possible= False
+
     cum_time_list = []
+    time_list = []
+
+    cur_volume_list = []
+    volume_list =[]
+
     price_list =[]
     timestamp = '0-0-0 0:0:0'
     lines = last_prices
+
+    buy_quantity = 1
+    sell_quantity = 1
+
     # offset is assumed to be only negative
     if (samples_per_decision <= len(lines)) and (abs(offset) <= len(lines) and ((offset+samples_per_decision) <= 0)):
         
@@ -150,12 +160,6 @@ def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
         is_possible = True
     else:
         is_possible = False
-
-    time_list = []
-    price_list = []
-
-    buy_quantity = 1
-    sell_quantity = 1
 
     if is_possible == True:  
 
@@ -178,8 +182,11 @@ def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
         timestamp = line['timestamp']
         last_price = line['last_price']
         price_list.append(line['last_price'])
+        volume_list.append(line['volume'])
         time_list.append(0)
         prev_time_obj = time.strptime(timestamp.split()[-1], "%H:%M:%S")
+        day_cross_over = 0
+        last_day_max_volume = 0
         for line in selected_lines[1:]:
             if (line != '\n') and line != '':
                 json_acceptable_string = line.replace("'", "\"")
@@ -187,7 +194,7 @@ def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
 
                 timestamp = line['timestamp']
                 last_price = line['last_price']
-                
+                volume = line['volume']
                 if 'buy_quantity' in line:
                     buy_quantity = buy_quantity + line['buy_quantity']
                 else:
@@ -203,15 +210,37 @@ def sample_last_prices(last_prices,samples_per_decision=20,offset=-1):
                 if cur_time_obj > prev_time_obj:
                     time_list.append((cur_time_obj.tm_hour - prev_time_obj.tm_hour)*60*60 + 
                     (cur_time_obj.tm_min - prev_time_obj.tm_min)*60+(cur_time_obj.tm_sec - prev_time_obj.tm_sec))
+
+                    if (day_cross_over == 0):
+                        volume_list.append(volume)
+                    else:
+                        volume_list.append(last_day_max_volume + volume)
+
                 elif cur_time_obj < prev_time_obj:
                     time_list.append(0.001)
+                    day_cross_over = 1
+                    last_day_max_volume = volume_list[-1]
+                    volume_list.append(last_day_max_volume + volume) #max(volume_list) is the last maximum volume pf previous day
+                    #print('day cross over happened with previous day volume {} and fresh volume {}'.format(last_day_max_volume,volume))
                 else:
                     time_list.append(0.001)
+                    if (day_cross_over == 0):
+                        volume_list.append(volume)
+                    else:
+                        volume_list.append(last_day_max_volume + volume)
+
                 #    my_logger.debug('skipping the time stamp')
                 prev_time_obj = cur_time_obj
 
         cum_time_list = [sum(time_list[0:x:1]) for x in range(1, len(time_list)+1)]   
-    return np.array(cum_time_list), np.array(price_list), timestamp, is_possible, buy_quantity/sell_quantity
+        
+        #prev_volume= volume_list[0]
+        #for volume in volume_list:
+        #    cur_volume_list.append(volume - prev_volume)
+        #    prev_volume = volume
+        cur_volume_list = volume_list
+
+    return np.array(cum_time_list), np.array(price_list),np.array(cur_volume_list), timestamp, is_possible, buy_quantity/sell_quantity
 
 def prep_last_prices(watch_list,data_path='E:\\kite\\history\\',load_num_samples=50,offset=-1, my_logger=None):
     
@@ -255,129 +284,183 @@ def prep_last_prices(watch_list,data_path='E:\\kite\\history\\',load_num_samples
    
     return last_prices
 
-def take_buy_decision(kite,slot_exec_flag,slot_exec_time,trading_session,watch_list_trading_symbol,system_time,slot_buy_amount,buy_trigger,timestamp_list,my_logger):
+def take_buy_decision(kite,trade_book,last_price,trading_session,watch_list_trading_symbol,system_time,slot_buy_amount,buy_trigger,my_logger,decay_fact=0.5,offset=-1):
     
-    buystock = ''
+    buystock_list = []
+    quant_list =[]
     
-    for idx, (flag,tic) in enumerate(zip(slot_exec_flag, slot_exec_time)):
-        tic_hr = (int)(tic.split(':')[0])
-        tic_min = (int)(tic.split(':')[1])
-        if (trading_session == True):
-            if (system_time.tm_hour >= tic_hr) and (system_time.tm_min >= tic_min) and flag == False:
-                slot_exec_flag[idx] = True
+    # find total buy triggers
+    buy_trigger_sum = 0
+    for buy_item in buy_trigger:
+        if buy_item > 0.0:
+            buy_trigger_sum += buy_item
+    
+    for idx, item in enumerate(trade_book):
+        
+        #if buy_trigger[idx]> 0.0:
+        item = item+slot_buy_amount*(buy_trigger[idx]/buy_trigger_sum)
+        trade_book[idx] = item
 
-                my_logger.debug("Maximum theta is {}".format(np.max(buy_trigger)))
+        buy_trigger[idx] = buy_trigger[idx]*decay_fact
 
-                buystock = watch_list_trading_symbol[np.where(buy_trigger == np.amax(buy_trigger))[0][0]].replace('NSE:','')
-                
-                if (buystock == 'NIFTY 50'):
-                    buystock = 'NIFTYBEES'
+        my_logger.debug("trade_book for stock {} is  {} ".format( watch_list_trading_symbol[idx], trade_book[idx]))                        
+        
+        if(item >= 4000):
 
-
-                try:
-                    buy_quant = slot_buy_amount/kite.ltp('NSE:'+buystock)['NSE:'+buystock]['last_price']
-                    if buy_quant < 1.0:
-                        buy_quant = 1
-                    else:
-                        buy_quant = (int)(buy_quant)
-                    order_id = kite.place_order(variety=kite.VARIETY_REGULAR,
-                                    exchange=kite.EXCHANGE_NSE,
-                                    tradingsymbol=buystock,
-                                    transaction_type=kite.TRANSACTION_TYPE_BUY,
-                                    quantity=buy_quant, # buying quantatity should depend on current theta and momentum of theta
-                                    product=kite.PRODUCT_CNC,
-                                    order_type=kite.ORDER_TYPE_MARKET)
-                    my_logger.debug("Buy Order placed for stock {}".format(buystock))                                        
-                    print("Buy Order placed for stock {}".format(buystock))                                        
+            buystock = watch_list_trading_symbol[idx].replace('NSE:','')
+            
+            if (buystock == 'NIFTY 50'):
+                buystock = 'NIFTYBEES'
+            
+            if trading_session == True:
+                try:                
+                    cur_price = kite.ltp('NSE:'+buystock)['NSE:'+buystock]['last_price']
                 except Exception as e:                                        
-                    my_logger.debug("Buy Order could not be placed for stock {}".format(buystock))
-                    
-                buy_trigger = buy_trigger*0.7 #once will check this after removing
-                
-        else:
-            buy_indx = np.where(buy_trigger == np.amax(buy_trigger))[0][0]
-            if ((int(timestamp_list[buy_indx].split()[1].split(":")[0])) == tic_hr) and ((int(timestamp_list[buy_indx].split()[1].split(":")[1])) == tic_min) and flag == False:
-                buystock = watch_list_trading_symbol[np.where(buy_trigger == np.amax(buy_trigger))[0][0]].replace('NSE:','')
-                slot_exec_flag[idx] = True
-                #buy_trigger = np.zeros(len(watch_list_trading_symbol))
-                buy_trigger = buy_trigger*0.7
-                my_logger.debug("Buy stock {} at time {}".format(buystock,timestamp_list[buy_indx]))
-                print("Buy stock {} at time {}".format(buystock,timestamp_list[buy_indx]))
+                    my_logger.debug("could not get ltp for stock {} while buying".format(buystock))                
+                    cur_price = 0.0
 
-    return buy_trigger,buystock
+                system_time = str(time.localtime(time.time()))
+            else:
+                line = last_price[watch_list_trading_symbol[idx]][offset]
+                json_acceptable_string = line.replace("'", "\"")
+                if json_acceptable_string == '':
+                    continue
+                line = json.loads(json_acceptable_string)
+                cur_price = (int)(line['last_price'])
+                system_time =  line['timestamp']          
+            
+            if cur_price > 0.0:
+                buy_quant = (int)(item/cur_price)
+            else:
+                buy_quant = 0
 
+            if buy_quant >= 1:
+                buystock_list.append(buystock)
+                quant_list.append(buy_quant)
 
-def take_sell_decision(kite,slot_exec_flag,slot_exec_time,trading_session,watch_list_trading_symbol,system_time,slot_sell_amount,sell_trigger,timestamp_list,my_logger):
-    for idx, (flag,tic) in enumerate(zip(slot_exec_flag, slot_exec_time)):
-        tic_hr = (int)(tic.split(':')[0])
-        tic_min = (int)(tic.split(':')[1])
-        if (trading_session == True):
-            if (system_time.tm_hour >= tic_hr) and (system_time.tm_min >= tic_min) and flag == False:
-                slot_exec_flag[idx] = True
-                exchange = ''
-                all_buy_index = np.where(sell_trigger >=0)
-                sell_trigger[all_buy_index] = 0
-                
-                while exchange == '':
-                    sell_index = np.where(sell_trigger == np.amin(sell_trigger))[0][0]
-                    sellstock = watch_list_trading_symbol[sell_index].replace('NSE:','')
-
-                    if (sellstock == 'NIFTY 50'):
-                        sellstock = 'NIFTYBEES'
-
-                    my_logger.debug("candidate sell stock is {}\n".format(sellstock))
-                    my_logger.debug("Minimum theta is {}".format(np.min(sell_trigger)))
-
-                    sell_trigger[sell_index] = 0
-                    quantity = 1
-
-                    for holding in kite.holdings():
-                        if holding['tradingsymbol'] == sellstock:
-                            exchange = holding['exchange']
-                            quantity = holding['quantity']
-                            my_logger.debug("Found the sell stock {} in holding \n".format(sellstock))
-                            break
-
-                    if np.sum(sell_trigger) == 0:
-                        break
-
-                if exchange == 'NSE':
-                    exchange = kite.EXCHANGE_NSE
-                elif exchange == 'BSE':
-                    exchange = kite.EXCHANGE_BSE
-                else:
-                    my_logger.debug("exchange is wrong. Could not find the sell stock in holdings at all \n")
-
-                if exchange != '':
-                    sell_quant = slot_sell_amount/kite.ltp('NSE:'+sellstock)['NSE:'+sellstock]['last_price']
-                    if sell_quant < 1.0:
-                        sell_quant = 1
-                    else:
-                        sell_quant = (int)(sell_quant)
-                    
-                    sell_quant = min(quantity,sell_quant)
-
-                    try: # need to check if stock is there in portfolio or not
+                if trading_session == True:
+                    try:
                         order_id = kite.place_order(variety=kite.VARIETY_REGULAR,
-                                        exchange=exchange,
-                                        tradingsymbol=sellstock,
-                                        transaction_type=kite.TRANSACTION_TYPE_SELL,
-                                        quantity=sell_quant,
+                                        exchange=kite.EXCHANGE_NSE,
+                                        tradingsymbol=buystock,
+                                        transaction_type=kite.TRANSACTION_TYPE_BUY,
+                                        quantity=buy_quant, # buying quantatity should depend on current theta and momentum of theta
                                         product=kite.PRODUCT_CNC,
                                         order_type=kite.ORDER_TYPE_MARKET)
-                        my_logger.debug("Sell Order placed for stock {} on exchange {} for quantaty {}".format(sellstock,exchange,sell_quant))                                            
+                        my_logger.debug("Buy Order placed for stock {} with score {} and order id {}".format(buystock,buy_trigger[idx],order_id))                                        
+                        print("Buy Order placed for stock {}".format(buystock))                                        
+                        trade_book[idx] = trade_book[idx] - buy_quant*cur_price
+                        print("pending trade for stock {} is reduced to {}".format(buystock,trade_book[idx]))
+                        my_logger.debug("pending trade for stock {} is reduced to {}".format(buystock,trade_book[idx]))
                     except Exception as e:                                        
-                        my_logger.debug("Sell Order could not be placed for stock {} on exchange {} for quantaty {}".format(sellstock,exchange,sell_quant))                                            
+                        my_logger.debug("Buy Order could not be placed for stock {}".format(buystock))
                 else:
-                    my_logger.debug('Exchange is wrong while placing the order')
+                    print("Buy Order placed for stock {} {} numbers @ {} at time {}".format(buystock,buy_quant,cur_price,system_time))     
+                    trade_book[idx] = trade_book[idx] - buy_quant*cur_price
+                    print("pending trade for stock {} is reduced to {}".format(buystock,trade_book[idx]))
+                    my_logger.debug("pending trade for stock {} is reduced to {}".format(buystock,trade_book[idx]))
 
-                sell_trigger = np.zeros(len(watch_list_trading_symbol)) #once will check this after removing
+        if(item <= -20000):
+
+            sellstock = watch_list_trading_symbol[idx].replace('NSE:','')
+            
+            if (sellstock == 'NIFTY 50'):
+                sellstock = 'NIFTYBEES'
+            
+            if trading_session == True:
+                try:                
+                    cur_price = kite.ltp('NSE:'+sellstock)['NSE:'+sellstock]['last_price']
+                except Exception as e:                                        
+                    my_logger.debug("could not get ltp for stock {} while buying".format(sellstock))                
+                    cur_price = 0.0
+
+                system_time = str(time.localtime(time.time()))
+            else:
+                line = last_price[watch_list_trading_symbol[idx]][offset]
+                json_acceptable_string = line.replace("'", "\"")
+                if json_acceptable_string == '':
+                    continue
+                line = json.loads(json_acceptable_string)
+                cur_price = (int)(line['last_price'])
+                system_time =  line['timestamp']          
+            
+            if cur_price > 0.0:
+                sell_quant = (int)((0.0-item)/cur_price)
+            else:
+                sell_quant = 0
+
+            if sell_quant >= 1:
+                buystock_list.append(sellstock)
+                quant_list.append(-sell_quant)
+
+                if trading_session == True:
+                    try:
+                        order_id = kite.place_order(variety=kite.VARIETY_REGULAR,
+                                        exchange=kite.EXCHANGE_NSE,
+                                        tradingsymbol=sellstock,
+                                        transaction_type=kite.TRANSACTION_TYPE_SELL,
+                                        quantity=sell_quant, # buying quantatity should depend on current theta and momentum of theta
+                                        product=kite.PRODUCT_CNC,
+                                        order_type=kite.ORDER_TYPE_MARKET)
+                        my_logger.debug("SELL Order placed for stock {} with score {}".format(sellstock,buy_trigger[idx]))                                        
+                        print("SELL Order placed for stock {}".format(sellstock))                                        
+                        trade_book[idx] = trade_book[idx] + sell_quant*cur_price
+                        print("pending trade for stock {} is increased to {}".format(sellstock,trade_book[idx]))
+                        my_logger.debug("pending trade for stock {} is increased to {}".format(sellstock,trade_book[idx]))
+                    except Exception as e:                                        
+                        my_logger.debug("SELL Order could not be placed for stock {}".format(sellstock))
+                else:
+                    print("SELL Order placed for stock {} {} numbers @ {} at time {}".format(sellstock,sell_quant,cur_price,system_time))     
+                    trade_book[idx] = trade_book[idx] + sell_quant*cur_price
+                    print("pending trade for stock {} is increased to {}".format(sellstock,trade_book[idx]))
+                    my_logger.debug("pending trade for stock {} is increased to {}".format(sellstock,trade_book[idx]))
+
+    return buystock_list,quant_list
+
+
+def get_avg_volume_per_second(last_prices,avg_volume,data_path='E:\\kite\\history\\April-2022\\',max_num_days=4):
+
+    for stock_id,stock in enumerate(last_prices):
+        num_days_found = 0
+        volume = 0
+        prev_date = 100
+        hr_ref = 15
+        min_ref = 20
+        try:
+            file = open(data_path+stock.replace(':',"_")+'_.txt', 'r')
+            file_present = 1
+        except Exception as e:
+            file_present = 0
+
+        if file_present == 1:
+            json_data = file.read()
+            lines = json_data.split("\n")
+
+            for idx in range(-1,-len(lines),-1):
+                line = lines[idx]
+                json_acceptable_string = line.replace("'", "\"")
+                if json_acceptable_string == '':
+                    continue
+                line = json.loads(json_acceptable_string)
+                timestamp = line['timestamp']
+                yr,mnth,date = timestamp.split()[0].split('-')
+                hr,min,sec = timestamp.split()[1].split(':')
+
+                if((int(hr) >= int(hr_ref)) and (int(min) >= int(min_ref))) and (int(date) != int(prev_date)):
+                    num_days_found = num_days_found + 1
+                    volume = volume + int(line['volume'])
+                    prev_date = int(date)
+                  
+                if num_days_found >= max_num_days:
+                    break
+            file.close()
+
+        if num_days_found >= 1:
+            avg_volume[stock_id] = (volume/num_days_found)/22500 # 22500 is total number of seconds in 6:15 hr
         else:
-            sell_indx = np.where(sell_trigger == np.amin(sell_trigger))[0][0]
-            if ((int(timestamp_list[sell_indx].split()[1].split(":")[0])) == tic_hr) and flag == False:
-                sellstock = watch_list_trading_symbol[sell_indx].replace('NSE:','')
-                slot_exec_flag[idx] = True
-                sell_trigger = np.zeros(len(watch_list_trading_symbol))
-                my_logger.debug("Sell stock {} at time {}".format(sellstock,timestamp_list[sell_indx]))
+            avg_volume[stock_id] = 0
+                    
 
-    return sell_trigger
+    return avg_volume
+
+
