@@ -1,10 +1,19 @@
-1) use weighted updation of buy_trigger and sale trigger [Done]
-2) in debug mode print loss and gain [Done]
-3) Improve debug mode by reading the quote file only once [Done]
-4) In sell decision, if sell quatatity is there in portfolio or not
-5) Use the buy and sell quatatity information from quote
-6) Make hostogram of theta and ration of buy/sell quantatity and take decision
-7) Make some early trigger, no need to wait for time slot
-8) keep running count of buy_amount and sell amount
-9) Use variance in theta to get good spike candidate
-10) Some logic for rule out false spike
+1) Make hostogram of theta and ration of buy/sell quantatity and take decision
+2) Use variance in theta to get good spike candidate
+3) Some logic for rule out false spike
+4) Add nifty 50 stock in tracking
+5) Do we need to do forget if pending sale amount is too high
+6) Do need to consider present %gain of particular stock to accelerate or deccelerate buy or sell.
+7) calculate variance and take call for right peak and decision to buy / selll buffer
+8) in a day 4-5 times save intgermediate data
+9) make script based and put important prameter as input and regress
+14) replace all buy and sell orders with GTT
+15) have individual weightage of stock for faster buy  or faster sell. Or more quantatiy buy or sell
+16) Make use of real usefulness of momentum. Mass* velocity. Right now for all stock masss is constant. It should be market captilization of the stock
+17) if some stock gains next day only then sell immediately
+
+
+Rule book
+1) All liquid money should get invested in one month
+2) 0.5% sell has to happen every day
+3) No buy sell mannually
