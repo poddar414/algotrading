@@ -13,7 +13,7 @@ def my_init(debug_time,data_path='E:\\kite\\pykiteconnect\\history\\',samples_pe
     
     # Check if login is required or not
     system_time = time.localtime(time.time())
-    if (system_time.tm_hour >= 7) and trading_session == False and (system_time.tm_hour <= 16) and debug_session==False:
+    if debug_session==False:
     #if True:
         kite = kite_login()
         offset = -samples_per_decision # load minimum number of samples from file # offset is assumed to be only negative
@@ -95,12 +95,8 @@ def prep_watch_list(watch_list_file):
         line_split = line.split()
         stock_name = line_split[0]
 
-        if len(line_split) > 1:
-            last_price = float(line_split[4])
-            weight = float(line_split[6])
-        else:
-            last_price = 1.0
-            weight = 1.0
+        last_price = 1.0
+        weight = 1.0
 
         entry = {'tradingsymbol':'NSE:'+stock_name,'weight':weight,'last_price':last_price}
         
@@ -167,10 +163,12 @@ def sample_last_prices(last_prices,stock,samples_per_decision=20,offset=-1,my_lo
     timestamp = '0-0-0 0:0:0'
     lines = last_prices
 
-    buy_quantity = 1
-    sell_quantity = 1
+    buy_quantity = []
+    sell_quantity = []
+    over_deamnd = 1
+    over_deamnd_tiny = 1
 
-    if len(lines) < 400:
+    if len(lines) < 4000000:
         local_debug = False
     else:
         local_debug = False
@@ -232,14 +230,14 @@ def sample_last_prices(last_prices,stock,samples_per_decision=20,offset=-1,my_lo
                     my_logger.debug("{} --> {} stock last_price is {} timestamp is {} ".format(idx, stock, last_price, timestamp))
 
                 if 'buy_quantity' in line:
-                    buy_quantity = buy_quantity + line['buy_quantity']
+                    buy_quantity.append(line['buy_quantity'])
                 else:
-                    buy_quantity = 1
+                    buy_quantity.append(1)
 
                 if 'sell_quantity' in line:
-                    sell_quantity = sell_quantity + line['sell_quantity']
+                    sell_quantity.append(line['sell_quantity'])
                 else:
-                    sell_quantity = 1
+                    sell_quantity.append(1)
 
                 price_list.append(last_price)
                 cur_time_obj = prev_time_obj
@@ -299,8 +297,11 @@ def sample_last_prices(last_prices,stock,samples_per_decision=20,offset=-1,my_lo
                 my_logger.debug("{} stock volume is {}".format(stock,prev_volume))
 
         cur_volume_list = volume_list
+        over_deamnd = (sum(buy_quantity) - sum(sell_quantity))/(sum(sell_quantity) + 1)
+        over_deamnd_tiny = (sum(buy_quantity[(int)(-samples_per_decision/10):]) - sum(sell_quantity[(int)(-samples_per_decision/10):]))/(sum(sell_quantity[(int)(-samples_per_decision/10):])+1)
 
-    return np.array(cum_time_list), np.array(price_list),np.array(cur_volume_list), timestamp, is_possible, buy_quantity/sell_quantity
+    #return np.array(cum_time_list), np.array(price_list),np.array(cur_volume_list), timestamp, is_possible, buy_quantity/sell_quantity
+    return np.array(cum_time_list), np.array(price_list),np.array(cur_volume_list), timestamp, is_possible, over_deamnd, over_deamnd_tiny
 
 def prep_last_prices(watch_list,data_path='E:\\kite\\history\\',load_num_samples=50,offset=-1, my_logger=None):
     
@@ -338,6 +339,8 @@ def prep_last_prices(watch_list,data_path='E:\\kite\\history\\',load_num_samples
 
         if is_possible == True:
             last_prices[stock] = selected_lines
+            if last_prices[stock][-1] == '':
+                del last_prices[stock][-1]
         else:
             last_prices[stock] = []
             
@@ -356,28 +359,34 @@ def take_buy_sell_decision(kite,holdings,trade_book_buy,trade_book_sell,last_pri
     up_stocks = 0
     down_stocks = 0
 
-    for buy_item, sell_item in zip(buy_trigger,sell_trigger):
+    for idx, (buy_item, sell_item) in enumerate(zip(buy_trigger,sell_trigger)):
+
+        if idx >= 66: # small cap starts from here
+            continue
 
         buy_trigger_sum += buy_item
         sell_trigger_sum += sell_item
 
-        if (buy_item + sell_item) >= 0.0: # if overall stat says few buys then it is good time to buy as prices would have fallen 
+        if (buy_item + sell_item) > 0.0: # if overall stat says few buys then it is good time to buy as prices would have fallen 
             up_stocks = up_stocks + 1
 
         if (buy_item + sell_item) < 0.0:
             down_stocks = down_stocks + 1
 
-    up_stocks = (up_stocks+0.0001)/(len(buy_trigger)) # percentage of up stock is high, hence buy more frequently (no need to be matured), sell delayed (more matured)
-    down_stocks = (down_stocks+0.0001)/(len(sell_trigger)) # percentage of down stock is high, hence buy less frequently (or more matured), sell frequently
+    up_stocks = (up_stocks+0.0001)/(up_stocks + down_stocks) # percentage of up stock is high, hence buy more frequently (no need to be matured), sell delayed (more matured)
+    down_stocks = (down_stocks+0.0001)/(up_stocks + down_stocks) # percentage of down stock is high, hence buy less frequently (or more matured), sell frequently
     
-    up_stocks = up_stocks + 0.1 # all are falling then up_stocks = 0.1, down_stocks ~= 0.9. so buffer to buy should be ten times higher e.g. ~10k, sell buffer ~10k
-    down_stocks = down_stocks + 0.1 # all are gaining then up_stocks ~= 1.0 down_stocks = 0.1. so buffer to sell should be ten times higher e.g ~1L, and buffer to buy ~= 1k
+    up_stocks = up_stocks + 0.2 # all are falling then up_stocks = 0.1, down_stocks ~= 0.9. so buffer to buy should be ten times higher e.g. ~10k, sell buffer ~10k
+    down_stocks = down_stocks + 0.2 # all are gaining then up_stocks ~= 1.0 down_stocks = 0.1. so buffer to sell should be ten times higher e.g ~1L, and buffer to buy ~= 1k
     
     my_logger.debug("percentage of up_stocks is {} and down_stocks is {}".format(up_stocks,down_stocks))
 
     
     for idx, (buy_item,sell_item) in enumerate(zip(trade_book_buy,trade_book_sell)):
-        
+
+        if idx >= 66: # small cap starts from here
+            continue
+
         # it is race between buy and sale, whoever reaches first will be executed first. Definitely sale is given more time than buy
         # speed of both and sell eace is same, only thing is that sell happens when too much of lag has happened.
         if buy_trigger[idx]> 0.0:
@@ -396,7 +405,9 @@ def take_buy_sell_decision(kite,holdings,trade_book_buy,trade_book_sell,last_pri
         buy_trigger[idx] = buy_trigger[idx]*decay_fact
         sell_trigger[idx] = sell_trigger[idx]*decay_fact
         
-        if(buy_item >= (4*min_buy_amount/down_stocks)):
+        buy_fact,sell_fact = calc_buy_sell_fact(holdings, watch_list_trading_symbol[idx])
+
+        if(buy_item >= (buy_fact*min_buy_amount/down_stocks)):
 
             buystock = watch_list_trading_symbol[idx].replace('NSE:','')
             
@@ -460,7 +471,7 @@ def take_buy_sell_decision(kite,holdings,trade_book_buy,trade_book_sell,last_pri
                     print("pending trade for stock {} is reduced to {}".format(buystock,trade_book_buy[idx]))
                     my_logger.debug("pending trade for stock {} is reduced to {}".format(buystock,trade_book_buy[idx]))
 
-        if(sell_item <= (-(min_buy_amount*10))/up_stocks):
+        if(sell_item <= (-(min_buy_amount*sell_fact))/up_stocks):
 
             if watch_list_trading_symbol[idx] in not_sale_list:
                 print('Avoiding the sale of stock {}'.format(watch_list_trading_symbol[idx]))
@@ -492,7 +503,7 @@ def take_buy_sell_decision(kite,holdings,trade_book_buy,trade_book_sell,last_pri
             else:
                 sell_quant = 0
             
-            cur_num_stock = get_num_stock(holdings,sellstock)
+            cur_num_stock,_ = get_num_stock(holdings,sellstock)
             sell_quant = min(cur_num_stock,sell_quant)
 
             if sell_quant >= 1:
@@ -617,12 +628,12 @@ def get_num_stock(holdings,stock):
     if len(split_list) == 2:
         stock = split_list[1]
     
-    for holding in holdings: # IN DEBUG SESSION read txt files and determine holdings. 
+    for idx,holding in enumerate(holdings): # IN DEBUG SESSION read txt files and determine holdings. 
         stock_name = holding['tradingsymbol']
         if stock_name == stock:
-            return holding['quantity']
+            return holding['quantity'], idx
     else:
-        return 0
+        return 0,-1
 
 def update_num_stock(holdings,stock,quant):
     
@@ -631,12 +642,39 @@ def update_num_stock(holdings,stock,quant):
     if len(split_list) == 2:
         stock = split_list[1]
     
-    for holding in holdings: # IN DEBUG SESSION read txt files and determine holdings. 
+    for holding in enumerate(holdings): # IN DEBUG SESSION read txt files and determine holdings. 
         stock_name = holding['tradingsymbol']
         if stock_name == stock:
             holding['quantity'] = quant
     else:
         return 0
+
+def calc_buy_sell_fact(holdings,buystock):
+    cur_num_stock,idx = get_num_stock(holdings,buystock)
+    min_fact = 0
+    max_fact = 6
+    if cur_num_stock > 0:
+        holding = holdings[idx]
+        per_gain = cur_num_stock*((holding['last_price'] - holding['average_price'])/holding['average_price'])
+        
+        if per_gain > 30.0:
+            per_gain = 30.0
+        elif per_gain<-30.0:
+            per_gain = -30.0
+        
+        per_gain = per_gain + 30.0 # range from 0 to 60
+        per_gain = per_gain /10 # range 0 to 6
+        buy_fact  = max_fact - ((max_fact - min_fact)/6)*per_gain # range 10 To 0
+        sell_fact = min_fact + ((max_fact - min_fact)/6)*per_gain # range 0 to 10
+        buy_fact  = buy_fact + 1 # range 11 To 1
+        sell_fact  = sell_fact + 4 # range 1 to 11
+    else:
+        buy_fact = 1
+        sell_fact = 10000
+
+    buy_fact = buy_fact + 20
+    sell_fact = sell_fact + 20
+    return buy_fact,sell_fact
 
 def get_buy_sell_amount(holdings,num_stock_list):
     sell_amount = 0
@@ -715,7 +753,7 @@ def update_last_trade_history(watch_list_trading_symbol,trade_book_rs_buy,trade_
                 my_logger.debug("Pending Sell trade for stock {} is {} with trigger value {} ".format(stock,trade_book_rs_sell[cur_idx],sell_trigger[cur_idx]))
 
         for idx,stock in enumerate(watch_list_trading_symbol):
-            if get_num_stock(holdings,stock) == 0:
+            if get_num_stock(holdings,stock)[0] == 0:
                 print("No holdig for stock {} hence setting trade_book_rs_sell/sell_trigger to zero \n".format(stock))
                 trade_book_rs_sell[idx] = 0
                 sell_trigger[idx] = 0
